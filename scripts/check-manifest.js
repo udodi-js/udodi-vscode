@@ -12,4 +12,5 @@ const files = [
 for (const file of files) {
 	JSON.parse(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'));
 }
+
 process.stdout.write(`Validated ${files.length} JSON files.\n`);
