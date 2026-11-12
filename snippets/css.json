@@ -1,0 +1,3 @@
+{
+  "Udodi style template": { "prefix": "ud-css", "body": ["style: css`", "\t${1:.component} {", "\t\t${2:display}: ${3:block};", "\t}", "`,"], "description": "Create a CSS tagged template for a Udodi component" }
+}

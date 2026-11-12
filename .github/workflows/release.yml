@@ -1,0 +1,55 @@
+name: Publish and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm run test:all
+
+      - name: Validate extension sources
+        run: npm run build
+
+      - name: Check tag matches extension version
+        id: version
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_NAME" != "v$package_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME must match package.json version v$package_version" >&2
+            exit 1
+          fi
+          echo "vsix=udodi-$package_version.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Package extension
+        run: npm run package -- --out "${{ steps.version.outputs.vsix }}"
+
+      - name: Publish to Visual Studio Marketplace
+        run: npx @vscode/vsce publish --packagePath "${{ steps.version.outputs.vsix }}" --oidc --skip-duplicate
+
+      - name: Create GitHub release with VSIX
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "${{ steps.version.outputs.vsix }}" --title "Udodi $GITHUB_REF_NAME" --generate-notes
