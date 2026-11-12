@@ -56,7 +56,8 @@ suite('Udodi extension host', () => {
 		assert.strictEqual(document.languageId, 'javascript');
 	});
 
-	test('offers Udodi directives inside html templates only', async () => {
+	test('offers Udodi directives inside html templates only', async function () {
+		this.timeout(10000);
 		const template = await openJavaScript('const view = html`<div @`;');
 		let labels = [];
 		for (let attempt = 0; attempt < 30 && !labels.includes('@text'); attempt++) {
@@ -120,6 +121,44 @@ suite('Udodi extension host', () => {
 		assert.ok(hovers?.some(hover => hover.contents.map(item => typeof item === 'string' ? item : item.value).join('\n').includes('upper(value)')), 'expected helper signature and docs on hover');
 	});
 
+	test('shows @for item and index hover descriptions in scope-inspection fixture', async function () {
+		this.timeout(10000);
+		const fixture = await fs.readFile(path.join(__dirname, 'fixtures', 'scope-inspection.js'), 'utf8');
+		const document = await openJavaScript(fixture);
+		const source = document.getText();
+		const loopStart = source.indexOf('@for="item index');
+		assert.notStrictEqual(loopStart, -1, 'expected @for declaration in scope-inspection fixture');
+
+		async function hoverTextAt(token) {
+			const offset = source.indexOf(token, loopStart) + 1;
+			let hovers = [];
+			for (let attempt = 0; attempt < 30; attempt++) {
+				hovers = await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, document.positionAt(offset));
+				const text = hovers?.flatMap(hover => hover.contents).map(item => typeof item === 'string' ? item : item.value).join('\n') || '';
+				if (text) return text;
+				await new Promise(resolve => setTimeout(resolve, 100));
+			}
+			return '';
+		}
+
+		assert.match(await hoverTextAt('item'), /item: object/);
+		assert.match(await hoverTextAt('index'), /index: number/);
+	});
+
+	test('does not split quoted @on arguments containing spaces', async function () {
+		this.timeout(10000);
+		const fixture = await fs.readFile(path.join(__dirname, 'fixtures', 'scope-inspection.js'), 'utf8');
+		const document = await openJavaScript(fixture);
+		let diagnostics = [];
+		for (let attempt = 0; attempt < 30; attempt++) {
+			diagnostics = vscode.languages.getDiagnostics(document.uri);
+			if (diagnostics.length) break;
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+		assert.ok(!diagnostics.some(diagnostic => diagnostic.code === 'event-binding-equals'), 'quoted handler arguments must remain part of the event binding');
+		assert.ok(!diagnostics.some(diagnostic => diagnostic.code === 'non-callable-handler'), 'a documented component method with a quoted argument must be recognized as callable');
+	});
+
 	test('completes component state and computed values plus event handler methods', async () => {
 		const source = `const Counter = createComponent({
 			state() { return { count: 0 }; },
@@ -137,6 +176,36 @@ suite('Udodi extension host', () => {
 		const methodItems = await completionsAt(document, '@on="click=inc');
 		const increment = methodItems.find(item => item.label === 'increment');
 		assert.strictEqual(increment?.detail, 'increment(event, step = 1): function');
+	});
+
+	test('goes to component, nested state, and loop-variable definitions', async function () {
+		this.timeout(10000);
+		const source = `const View = createComponent({
+			state: { user: { name: 'Ada' }, items: [{ label: 'One' }] },
+			methods: { save(event, message) {} },
+			template: html\`<p @text="user.name"></p><button @on="click=save:'hello'"></button><li @for="item index items"><span @text="item.label"></span><span @text="index"></span></li>\`,
+		});`;
+		const document = await openJavaScript(source);
+		async function definitionAt(marker, positionInMarker = 0) {
+			const markerOffset = source.lastIndexOf(marker) + positionInMarker;
+			for (let attempt = 0; attempt < 30; attempt++) {
+				const result = await vscode.commands.executeCommand('vscode.executeDefinitionProvider', document.uri, document.positionAt(markerOffset));
+				const location = Array.isArray(result) ? result[0] : result;
+				if (location) return location.targetRange ? location.targetRange.start : location.range.start;
+				await new Promise(resolve => setTimeout(resolve, 100));
+			}
+			return undefined;
+		}
+		const cases = [
+			['user.name', 5, source.indexOf('name:')],
+			['=save', 1, source.indexOf('save(')],
+			['item.label', 0, source.indexOf('item index')],
+			['item.label', 5, source.indexOf('label:')],
+			['index"></span>', 0, source.indexOf('item index') + 'item '.length]
+		];
+		for (const [marker, positionInMarker, targetOffset] of cases) {
+			assert.deepEqual(await definitionAt(marker, positionInMarker), document.positionAt(targetOffset), `expected ${marker} to resolve to its declaration`);
+		}
 	});
 
 	test('provides CSS property completion and documentation hover in css templates', async function () {

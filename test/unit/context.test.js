@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { cursorContext, cssTemplateContext, findTemplates } = require('../../language/context');
+const { cursorContext, cssTemplateContext, findTemplates, parseForAttribute } = require('../../language/context');
 
 test('finds only html and css tagged templates, not ordinary literals or comments', () => {
 	const source = [
@@ -21,6 +21,15 @@ test('detects directive-value context and leaves template interpolation to JavaS
 
 	const interpolationOffset = source.lastIndexOf('user.name') + 'user.name'.length;
 	assert.equal(cursorContext(source, interpolationOffset), undefined);
+});
+
+test('parses @for declarations from an attribute value or opening tag', () => {
+	assert.deepEqual(parseForAttribute('item index items'), {
+		item: 'item', index: 'index', expression: 'items'
+	});
+	assert.deepEqual(parseForAttribute('<li @for="item index items:user.name">'), {
+		item: 'item', index: 'index', expression: 'items:user.name'
+	});
 });
 
 test('does not return Udodi context for ordinary JavaScript template strings', () => {
