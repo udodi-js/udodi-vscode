@@ -1,0 +1,7 @@
+{
+  "Udodi text binding": { "prefix": "ud-text", "body": ["<${1:p} @text=\"${2:expression}\"></${1:p}>"] , "description": "Bind an element's text to a Udodi expression" },
+  "Udodi event handler": { "prefix": "ud-on", "body": ["<button @on=\"click=${1:handler}\">${2:Label}</button>"] , "description": "Bind a DOM event to a component handler" },
+  "Udodi conditional": { "prefix": "ud-if", "body": ["<div @if=\"${1:condition}\">", "\t${2:Content}", "</div>"] , "description": "Conditionally render an element" },
+  "Udodi loop": { "prefix": "ud-for", "body": ["<${1:li} @for=\"${2:item} ${3:items}\">", "\t<span @text=\"${2:item}\"></span>", "</${1:li}>"] , "description": "Render an element for each item in a collection" },
+  "Udodi component": { "prefix": "udodi-comp", "body": ["import { createComponent, html, css, render } from 'udodi';", "", "const ${1:MyComponent} = createComponent({", "\tname: '${1:MyComponent}',", "\tstate() { return { ${2:count}: 0 }; },", "\tmethods: { ${3:increment}() { this.${2:count}++; } },", "\ttemplate: html`", "\t\t<div><span @text=\"${2:count}\"></span>", "\t\t<button @on=\"click=${3:increment}\">+</button></div>", "\t`,", "\tstyle: css`", "\t\t/* component styles */", "\t`", "});", "render(${1:MyComponent}(), '#app');"], "description": "Create a component with Udodi HTML and CSS templates" }
+}

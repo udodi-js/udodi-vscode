@@ -1,0 +1,23 @@
+{
+  "scopeName": "udodi.html.injection",
+  "injectionSelector": "L:source.js -comment -string, L:source.ts -comment -string, L:source.js.jsx -comment -string, L:source.tsx -comment -string",
+  "patterns": [
+    {
+      "name": "meta.embedded.block.html",
+      "begin": "\\b(html)(\\s*)(`)",
+      "beginCaptures": {
+        "1": { "name": "entity.name.function.tagged-template.js" },
+        "3": { "name": "punctuation.definition.string.template.begin.js" }
+      },
+      "end": "`",
+      "endCaptures": { "0": { "name": "punctuation.definition.string.template.end.js" } },
+      "contentName": "meta.embedded.block.html",
+      "patterns": [
+        { "name": "meta.embedded.expression.js", "begin": "\\$\\{", "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.js" } }, "end": "\\}", "endCaptures": { "0": { "name": "punctuation.section.embedded.end.js" } }, "patterns": [{ "include": "source.js" }] },
+        { "name": "entity.other.attribute-name.directive.udodi", "match": "(?<=\\s)@[\\w-]+(?=\\s*(?:=|\\s|/?>))" },
+        { "name": "keyword.operator.expression.udodi", "match": "=>|\\|" },
+        { "include": "text.html.basic" }
+      ]
+    }
+  ]
+}
