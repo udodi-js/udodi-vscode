@@ -89,7 +89,7 @@
         "udodi.enableDiagnostics": {
           "type": "boolean",
           "default": true,
-          "description": "Show conservative diagnostics for Udodi template syntax."
+          "description": "Show static Udodi template and component diagnostics."
         }
       }
     }

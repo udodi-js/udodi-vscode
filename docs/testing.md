@@ -8,7 +8,7 @@ npm run build
 npm test
 ```
 
-`npm run test:unit` checks tagged-template and cursor-context detection, including CSS interpolation masking. `npm test` opens VS Code 1.146.0 as an Extension Development Host and checks activation, HTML directive/event completion, component-member completion, CSS property completion and hover, ordinary-template isolation, and event-binding diagnostics. The first run downloads the VS Code test runtime. On Windows, a sandbox may need permission to run the downloaded host because Electron's renderer subprocesses use AppContainer isolation.
+`npm run test:unit` checks tagged-template and cursor-context detection, including CSS interpolation masking and component definition offsets. `npm test` opens VS Code 1.146.0 as an Extension Development Host and checks activation, HTML directive/event completion, component-member completion, Go to Definition for component/nested-state/loop symbols, CSS property completion and hover, ordinary-template isolation, and event-binding diagnostics. The first run downloads the VS Code test runtime. On Windows, a sandbox may need permission to run the downloaded host because Electron's renderer subprocesses use AppContainer isolation.
 
 ## Inspect highlighting and embedding manually
 
@@ -32,6 +32,13 @@ In the Extension Development Host, verify these editing actions:
 - Hover `@text`, `click`, and `.prevent` for their descriptions.
 - In `style: css\`...\``, type `displ` in a rule and confirm `display` is suggested; hover `display` in a completed declaration to read its CSS documentation.
 - In a CSS template containing `${...}`, confirm CSS completion works around the interpolation while JavaScript completion works inside it.
+- In a component with `state() { return { items: [{ label: 'One' }] }; }`, use `<li @for="item index items"><span @text="item."></span><span @text="index"></span></li>`; check `label` completion and hover for `item` and `index` inside the loop.
+- Use Go to Definition on a component member, a nested property such as `user.name`, an `@for` item/index reference, and an inferred array item property such as `item.label`; confirm each jumps to its declaration.
+- In the same component, add `methods: { getItems() { return [{ label: 'One' }]; } }` and use `@for="item index getItems"`; confirm source completion shows `items` and `getItems`, and `item.label` resolves for the array-returning method.
+- Hover `item` and `index` within the `@for` value itself; each should describe the loop item type or zero-based numeric index.
+- In `@for="item index list:user."`, invoke completion after the dot and confirm properties from the component's `user` object appear. Repeat with `@on="click.prevent=save:user."`.
+- Hover `click` and `.prevent` independently in an `@on` value; each should describe the DOM event or modifier behavior.
+- Try `@text="user.missing"`, call an object as `user:items`, use a string where `@if` expects a boolean, and use a non-array source in `@for`; check that known invalid expressions receive diagnostics while valid nested paths do not.
 - Use `@on="click"` to see the conservative missing-`=` warning, then change it to `@on="click=save"` and confirm the warning clears.
 - Put the same `@` inside an ordinary JavaScript template literal; Udodi completion should not appear.
 - Place the cursor in `${...}` within `html`; JavaScript completion should take over.
