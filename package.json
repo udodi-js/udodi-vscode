@@ -1,0 +1,136 @@
+{
+  "name": "udodi",
+  "displayName": "Udodi",
+  "description": "Language support for Udodi templates in JavaScript and TypeScript",
+  "version": "1.0.0",
+  "publisher": "udodi-js",
+  "license": "MIT",
+  "keywords": [
+    "udodi",
+    "templates",
+    "html",
+    "css",
+    "javascript",
+    "typescript",
+    "language-server"
+  ],
+  "engines": {
+    "vscode": "^1.145.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact",
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact"
+  ],
+  "contributes": {
+    "grammars": [
+      {
+        "scopeName": "udodi.html.injection",
+        "path": "./syntaxes/udodi-html.tmLanguage.json",
+        "injectTo": [
+          "source.js",
+          "source.js.jsx",
+          "source.ts",
+          "source.tsx"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.html": "html"
+        }
+      },
+      {
+        "scopeName": "udodi.css.injection",
+        "path": "./syntaxes/udodi-css.tmLanguage.json",
+        "injectTo": [
+          "source.js",
+          "source.js.jsx",
+          "source.ts",
+          "source.tsx"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.css": "css"
+        }
+      }
+    ],
+    "snippets": [
+      {
+        "language": "javascript",
+        "path": "./snippets/html.json"
+      },
+      {
+        "language": "javascriptreact",
+        "path": "./snippets/html.json"
+      },
+      {
+        "language": "typescript",
+        "path": "./snippets/html.json"
+      },
+      {
+        "language": "typescriptreact",
+        "path": "./snippets/html.json"
+      },
+      {
+        "language": "javascript",
+        "path": "./snippets/css.json"
+      },
+      {
+        "language": "typescript",
+        "path": "./snippets/css.json"
+      }
+    ],
+    "configuration": {
+      "title": "Udodi",
+      "properties": {
+        "udodi.enableDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show conservative diagnostics for Udodi template syntax."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "lint": "eslint extension.js server language",
+    "pretest": "npm run lint",
+    "test": "vscode-test",
+    "test:unit": "node --test test/unit/*.test.js",
+    "test:all": "npm run test:unit && npm test",
+    "package": "vsce package",
+    "check:manifest": "node scripts/check-manifest.js",
+    "build": "npm run lint && npm run check:manifest",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "@types/vscode": "^1.145.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "^4.0.0",
+    "eslint": "^10.5.0",
+    "globals": "^17.14.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/udodi-js/udodi-vscode.git"
+  },
+  "homepage": "https://github.com/udodi-js/udodi-vscode#readme",
+  "bugs": {
+    "url": "https://github.com/udodi-js/udodi-vscode/issues"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  },
+  "dependencies": {
+    "vscode-css-languageservice": "^6.3.10",
+    "vscode-languageclient": "^11.0.0",
+    "vscode-languageserver": "^11.0.0",
+    "vscode-languageserver-textdocument": "^1.0.16"
+  }
+}
