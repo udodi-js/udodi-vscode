@@ -552,7 +552,17 @@ function componentDefinitions(source) {
 
 				const memberPath = [...path, key.name];
 				const start = property.start + key.start;
-				definitions.push({ name: key.name, path: memberPath, namespace: 'state', componentStart: objectOpen, componentEnd: objectClose, start, end: start + key.name.length });
+
+				// entryStart/entryEnd cover the full property entry so Peek Definition
+				// can show multi-line object/function bodies, not only the name line.
+				const entryStart = property.start;
+				const entryEnd = property.start + property.text.length;
+				
+				definitions.push({
+					name: key.name, path: memberPath, namespace: 'state',
+					componentStart: objectOpen, componentEnd: objectClose,
+					start, end: start + key.name.length, entryStart, entryEnd
+				});
 				
 				const colon = property.text.indexOf(':', key.start + key.name.length);
 				if (colon < 0) continue;
@@ -602,7 +612,14 @@ function componentDefinitions(source) {
 				if (!key) continue;
 
 				const start = property.start + key.start;
-				definitions.push({ name: key.name, path: [key.name], namespace: optionKey.name, componentStart: objectOpen, componentEnd: objectClose, start, end: start + key.name.length });
+				const entryStart = property.start;
+				const entryEnd = property.start + property.text.length;
+				
+				definitions.push({
+					name: key.name, path: [key.name], namespace: optionKey.name,
+					componentStart: objectOpen, componentEnd: objectClose,
+					start, end: start + key.name.length, entryStart, entryEnd
+				});
 			}
 		}
 	}

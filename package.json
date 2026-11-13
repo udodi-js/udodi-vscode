@@ -4,7 +4,7 @@
   "description": "Language support for Udodi templates in JavaScript and TypeScript",
   "version": "1.0.0",
   "publisher": "udodi-js",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "keywords": [
     "udodi",
     "templates",
@@ -21,6 +21,11 @@
     "Programming Languages",
     "Snippets"
   ],
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#040515",
+    "theme": "dark"
+  },
   "main": "./extension.js",
   "activationEvents": [
     "onLanguage:javascript",
@@ -119,9 +124,12 @@
     "type": "git",
     "url": "https://github.com/udodi-js/udodi-vscode.git"
   },
-  "homepage": "https://github.com/udodi-js/udodi-vscode#readme",
+  "homepage": "https://udodi.dev",
   "bugs": {
     "url": "https://github.com/udodi-js/udodi-vscode/issues"
+  },
+  "sponsor": {
+    "url": "https://github.com/sponsors/udodi-js"
   },
   "overrides": {
     "diff": "^8.0.4",
