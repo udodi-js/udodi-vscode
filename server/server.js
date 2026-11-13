@@ -343,7 +343,12 @@ function initializeServer() {
 			textDocumentSync: { openClose: true, change: 1 },
 			completionProvider: { triggerCharacters: ['@', '.', '|', '=', '"', ':', '-', '#', '{', ';', '(', ' '], resolveProvider: false },
 			hoverProvider: true,
-			definitionProvider: true
+			definitionProvider: true,
+			referencesProvider: true,
+			// Rename is advertised from the client (extension.js) so it can take
+			// precedence over the built-in JS/TS rename provider on the same document.
+			// Handlers remain registered below for textDocument/prepareRename and rename.
+			renameProvider: { prepareProvider: true }
 		}
 	};
 }
@@ -365,7 +370,9 @@ connection.onInitialize(initializeServer);
 connection.onInitialized(loadConfiguration);
 
 /**
- * Gets the full word range around a source offset for hover responses.
+ * Gets the identifier or directive range around a source offset for hover responses.
+ * Path segments such as `user` and `name` in `user.name` are treated as separate
+ * words so each segment can report its own type and range.
  *
  * @param {TextDocument} document Open LSP document.
  * @param {number} offset Cursor offset in document text.
@@ -376,11 +383,44 @@ function wordRange(document, offset) {
 	let start = offset;
 	let end = offset;
 
-	while (start > 0 && /[@\w.-]/.test(text[start - 1])) start--;
+	while (start > 0 && /[@\w$]/.test(text[start - 1])) start--;
 
-	while (end < text.length && /[\w.-]/.test(text[end])) end++;
+	while (end < text.length && /[\w$]/.test(text[end])) end++;
 
 	return { start: document.positionAt(start), end: document.positionAt(end) };
+}
+
+/**
+ * Locates the dotted path under the cursor and the specific segment being hovered.
+ *
+ * @param {string} value Attribute or expression text.
+ * @param {number} relativeOffset Offset relative to the start of `value`.
+ * @returns {{path: string[], segmentIndex: number, segmentStart: number, segmentEnd: number} | undefined}
+ */
+function pathSegmentAt(value, relativeOffset) {
+	for (const match of value.matchAll(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/g)) {
+		const pathStart = match.index;
+		const pathEnd = pathStart + match[0].length;
+		if (relativeOffset < pathStart || relativeOffset > pathEnd) continue;
+
+		const segments = match[0].split('.');
+		let cursor = pathStart;
+
+		for (let i = 0; i < segments.length; i++) {
+			const segmentEnd = cursor + segments[i].length;
+			if (relativeOffset >= cursor && relativeOffset <= segmentEnd) {
+				return {
+					path: segments,
+					segmentIndex: i,
+					segmentStart: cursor,
+					segmentEnd
+				};
+			}
+			cursor = segmentEnd + 1;
+		}
+	}
+
+	return undefined;
 }
 
 /**
@@ -617,33 +657,106 @@ function hover(document, position) {
 
 	if ((context.kind === 'value' && ['@on', '@for'].includes(context.directive)) || (context.kind === 'value' && HOVER_EXPRESSION_DIRECTIVES.has(context.directive))) {
 		const members = membersAt(text, offset);
-		const valuePrefix = text.slice(context.valueStart, start);
-		const path = `${valuePrefix}${word}`.match(/([\w$]+(?:\.[\w$]*)*)$/)?.[1]?.split('.').filter(Boolean);
-		const member = path?.length > 1 ? nestedMember(members, path) : members.find(item => item.name === word);
-		
+		const { value: fullValue, start: valueStart } = fullAttributeValue(text, context);
+		const relativeOffset = offset - valueStart;
+		const segment = pathSegmentAt(fullValue, relativeOffset);
+
+		if (segment) {
+			const pathUpTo = segment.path.slice(0, segment.segmentIndex + 1);
+			const member = pathUpTo.length > 1
+				? nestedMember(members, pathUpTo)
+				: members.find(item => item.name === pathUpTo[0]);
+
+			if (member) {
+				const segmentRange = {
+					start: document.positionAt(valueStart + segment.segmentStart),
+					end: document.positionAt(valueStart + segment.segmentEnd)
+				};
+				const result = member.returnType ? ` Returns \`${member.returnType}\`.` : '';
+				const kindLabel = member.kind === 'loop-item' || member.kind === 'loop-index'
+					? member.kind
+					: `Component ${member.kind}`;
+				return {
+					range: segmentRange,
+					contents: {
+						kind: MarkupKind.Markdown,
+						value: `**${member.signature}**  \n${kindLabel}.${result}`
+					}
+				};
+			}
+		}
+
+		// Fallback for non-path tokens (e.g. bare identifiers still covered by wordRange).
+		const member = members.find(item => item.name === word);
 		if (member) {
 			const result = member.returnType ? ` Returns \`${member.returnType}\`.` : '';
-			return { range, contents: { kind: MarkupKind.Markdown, value: `**${member.signature}**  \nComponent ${member.kind}.${result}` } };
+			return {
+				range,
+				contents: {
+					kind: MarkupKind.Markdown,
+					value: `**${member.signature}**  \nComponent ${member.kind}.${result}`
+				}
+			};
 		}
 	}
 
 	if (context.kind === 'value' && EXPRESSION_DIRECTIVES.has(context.directive)) {
 		const helper = stdlib.find(item => item.name === word);
 		const valuePrefix = text.slice(context.valueStart, start);
-		
-		if (helper && !/[\w$]+\.$/.test(valuePrefix)) return { range, contents: { kind: MarkupKind.Markdown, value: `**${helper.signature}**  \n${helper.description}` } };
+
+		if (helper && !/[\w$]+\.$/.test(valuePrefix)) {
+			return {
+				range,
+				contents: {
+					kind: MarkupKind.Markdown,
+					value: `**${helper.signature}**  \n${helper.description}`
+				}
+			};
+		}
 	}
 
 	return null;
 }
 
 /**
+ * Builds an LSP LocationLink so Peek Definition can highlight both the origin
+ * identifier and the target declaration.
+ *
+ * @param {TextDocument} document Open document.
+ * @param {number} originStart Absolute origin start offset.
+ * @param {number} originEnd Absolute origin end offset.
+ * @param {number} targetStart Absolute target start offset.
+ * @param {number} targetEnd Absolute target end offset.
+ * @param {number} [contextStart] Optional wider target context start.
+ * @param {number} [contextEnd] Optional wider target context end.
+ * @returns {import('vscode-languageserver/node').LocationLink}
+ */
+function locationLink(document, originStart, originEnd, targetStart, targetEnd, contextStart = targetStart, contextEnd = targetEnd) {
+	return {
+		originSelectionRange: {
+			start: document.positionAt(originStart),
+			end: document.positionAt(originEnd)
+		},
+		targetUri: document.uri,
+		targetRange: {
+			start: document.positionAt(contextStart),
+			end: document.positionAt(contextEnd)
+		},
+		targetSelectionRange: {
+			start: document.positionAt(targetStart),
+			end: document.positionAt(targetEnd)
+		}
+	};
+}
+
+/**
  * Finds the static component declaration targeted by an identifier in an
- * Udodi template expression.
+ * Udodi template expression. Returns a LocationLink so Peek Definition shows
+ * the declaration with the origin segment highlighted.
  *
  * @param {TextDocument} document Open JavaScript or TypeScript document.
  * @param {import('vscode-languageserver/node').Position} position LSP cursor position.
- * @returns {import('vscode-languageserver/node').Location | null} Definition location, when statically resolvable.
+ * @returns {import('vscode-languageserver/node').LocationLink | null} Definition link, when statically resolvable.
  */
 function definition(document, position) {
 	const source = document.getText();
@@ -655,7 +768,7 @@ function definition(document, position) {
 	const { value, start: valueStart } = fullAttributeValue(source, context);
 	const relativeOffset = offset - valueStart;
 	const literalRanges = [...value.matchAll(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g)];
-	
+
 	if (literalRanges.some(item => relativeOffset >= item.index && relativeOffset < item.index + item[0].length)) return null;
 
 	const declaration = context.directive === '@for' ? parseForAttribute(value) : undefined;
@@ -667,7 +780,9 @@ function definition(document, position) {
 
 			if (name && token && relativeOffset >= token.index && relativeOffset < token.index + token[0].length) {
 				const start = valueStart + token.index;
-				return { uri: document.uri, range: { start: document.positionAt(start), end: document.positionAt(start + name.length) } };
+				const end = start + name.length;
+				// Declaration site of the loop variable — peek shows the variable itself.
+				return locationLink(document, start, end, start, end);
 			}
 		}
 	}
@@ -677,52 +792,351 @@ function definition(document, position) {
 		if (bindingStart < 0) return null;
 	}
 
-	let reference;
-	let referenceStart;
+	const segment = pathSegmentAt(value, relativeOffset);
+	if (!segment) return null;
 
-	for (const match of value.matchAll(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/g)) {
-		if (relativeOffset >= match.index && relativeOffset < match.index + match[0].length) {
-			reference = match[0].split('.');
-			referenceStart = match.index;
-			break;
-		}
-	}
-
-	if (!reference) return null;
+	const reference = segment.path;
+	const pathToSegment = reference.slice(0, segment.segmentIndex + 1);
+	const originStart = valueStart + segment.segmentStart;
+	const originEnd = valueStart + segment.segmentEnd;
 
 	const activeLoops = forScopesAt(source, offset);
 	const loop = [...activeLoops].reverse().find(item => item.item === reference[0] || item.index === reference[0]);
-	let targetPath = reference;
+	let targetPath = pathToSegment;
 
 	if (loop) {
-		const onRoot = relativeOffset < referenceStart + reference[0].length;
+		const onRoot = segment.segmentIndex === 0;
 
 		if (loop.index === reference[0] && onRoot) {
-			return { uri: document.uri, range: { start: document.positionAt(loop.indexStart), end: document.positionAt(loop.indexStart + loop.index.length) } };
+			return locationLink(document, originStart, originEnd, loop.indexStart, loop.indexStart + loop.index.length);
 		}
 
 		if (loop.item === reference[0] && onRoot) {
-			return { uri: document.uri, range: { start: document.positionAt(loop.itemStart), end: document.positionAt(loop.itemStart + loop.item.length) } };
+			return locationLink(document, originStart, originEnd, loop.itemStart, loop.itemStart + loop.item.length);
 		}
 
 		if (loop.item === reference[0]) {
 			const sourcePath = loop.expression.match(/^([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)$/)?.[1];
 			if (!sourcePath) return null;
 
-			targetPath = [...sourcePath.split('.'), ...reference.slice(1)];
+			targetPath = [...sourcePath.split('.'), ...pathToSegment.slice(1)];
 		}
 	}
 
 	const target = componentDefinitions(source)
 		.filter(item => item.path.join('.') === targetPath.join('.') && offset > item.componentStart && offset < item.componentEnd)
 		.sort((left, right) => right.componentStart - left.componentStart)[0];
-	
+
+	if (!target) return null;
+
+	// Peek shows the full property entry (multi-line object/method body when present).
+	// targetSelectionRange stays on the identifier; targetRange spans the whole entry.
+	const contextStart = target.entryStart != null ? target.entryStart : target.start;
+	const contextEnd = target.entryEnd != null ? target.entryEnd : target.end;
+
+	return locationLink(document, originStart, originEnd, target.start, target.end, contextStart, contextEnd);
+}
+
+/**
+ * Resolves the rename target for a symbol under the cursor.
+ * Supports root-level component members (state/computed/methods) and @for loop variables.
+ * Nested property segments (the `name` in `user.name`) are not renamable as a unit.
+ *
+ * @param {TextDocument} document Open document.
+ * @param {import('vscode-languageserver/node').Position} position Cursor position.
+ * @returns {{range: import('vscode-languageserver/node').Range, path: string[], componentStart: number, componentEnd: number, name: string, isLoop: boolean, loopKind?: 'item' | 'index'} | null}
+ */
+function renameTarget(document, position) {
+	const source = document.getText();
+	const offset = document.offsetAt(position);
+	const context = cursorContext(source, offset);
+	const defs = componentDefinitions(source);
+
+	// Declaration site inside createComponent({ state/computed/methods }).
+	// Only root-level members (path length 1) so template root references stay in sync.
+	for (const def of defs) {
+		if (offset >= def.start && offset <= def.end && def.path.length === 1) {
+			return {
+				range: { start: document.positionAt(def.start), end: document.positionAt(def.end) },
+				path: def.path,
+				componentStart: def.componentStart,
+				componentEnd: def.componentEnd,
+				name: def.name,
+				isLoop: false
+			};
+		}
+	}
+
+	if (context?.kind !== 'value') return null;
+
+	const { value, start: valueStart } = fullAttributeValue(source, context);
+	const relativeOffset = offset - valueStart;
+
+	// @for item / index declaration tokens.
+	if (context.directive === '@for') {
+		const declaration = parseForAttribute(value);
+		if (declaration) {
+			const tokens = [...value.matchAll(/\S+/g)];
+			const itemToken = tokens[0];
+			const indexToken = declaration.index ? tokens[1] : undefined;
+
+			if (itemToken && relativeOffset >= itemToken.index && relativeOffset < itemToken.index + itemToken[0].length) {
+				const start = valueStart + itemToken.index;
+				return {
+					range: { start: document.positionAt(start), end: document.positionAt(start + declaration.item.length) },
+					path: [declaration.item],
+					componentStart: 0,
+					componentEnd: source.length,
+					name: declaration.item,
+					isLoop: true,
+					loopKind: 'item'
+				};
+			}
+
+			if (indexToken && relativeOffset >= indexToken.index && relativeOffset < indexToken.index + indexToken[0].length) {
+				const start = valueStart + indexToken.index;
+				return {
+					range: { start: document.positionAt(start), end: document.positionAt(start + declaration.index.length) },
+					path: [declaration.index],
+					componentStart: 0,
+					componentEnd: source.length,
+					name: declaration.index,
+					isLoop: true,
+					loopKind: 'index'
+				};
+			}
+		}
+	}
+
+	// For @on, only the handler after "=" is a renamable component symbol.
+	if (context.directive === '@on') {
+		const equals = value.lastIndexOf('=', relativeOffset);
+		if (equals < 0 || relativeOffset < equals) return null;
+	}
+
+	const segment = pathSegmentAt(value, relativeOffset);
+	if (!segment || segment.segmentIndex !== 0) return null;
+
+	const name = segment.path[0];
+	const range = {
+		start: document.positionAt(valueStart + segment.segmentStart),
+		end: document.positionAt(valueStart + segment.segmentEnd)
+	};
+
+	// Active @for loop variable at this position.
+	const activeLoops = forScopesAt(source, offset);
+	const loop = [...activeLoops].reverse().find(item => item.item === name || item.index === name);
+	if (loop) {
+		return {
+			range,
+			path: [name],
+			componentStart: 0,
+			componentEnd: source.length,
+			name,
+			isLoop: true,
+			loopKind: loop.index === name ? 'index' : 'item'
+		};
+	}
+
+	// Root component member reference inside a template expression.
+	const target = defs
+		.filter(item => item.path.length === 1 && item.path[0] === name && offset > item.componentStart && offset < item.componentEnd)
+		.sort((a, b) => b.componentStart - a.componentStart)[0];
+
 	if (!target) return null;
 
 	return {
-		uri: document.uri,
-		range: { start: document.positionAt(target.start), end: document.positionAt(target.end) }
+		range,
+		path: target.path,
+		componentStart: target.componentStart,
+		componentEnd: target.componentEnd,
+		name: target.name,
+		isLoop: false
 	};
+}
+
+/**
+ * Collects every same-file occurrence of a rename target that should be rewritten.
+ *
+ * @param {TextDocument} document Open document.
+ * @param {{path: string[], componentStart: number, componentEnd: number, name: string, isLoop: boolean, loopKind?: 'item' | 'index'}} target Resolved rename target.
+ * @returns {Array<{start: number, end: number}>} Absolute source ranges to replace.
+ */
+function collectRenameRanges(document, target) {
+	const source = document.getText();
+	const ranges = [];
+	const seen = new Set();
+
+	const add = (start, end) => {
+		if (start < 0 || end <= start) return;
+		const key = `${start}:${end}`;
+		if (seen.has(key)) return;
+		seen.add(key);
+		ranges.push({ start, end });
+	};
+
+	/**
+	 * Yields absolute ranges of root identifier occurrences of `name` inside a
+	 * directive attribute value. For `@on`, only the handler after `=` is considered.
+	 */
+	const collectInValue = (directive, value, valueOffset) => {
+		let searchValue = value;
+		let searchOffset = valueOffset;
+
+		if (directive === '@on') {
+			const equals = value.indexOf('=');
+			if (equals < 0) return;
+			searchValue = value.slice(equals + 1);
+			searchOffset = valueOffset + equals + 1;
+		}
+
+		if (directive === '@for') {
+			// When renaming a component member used as the loop source, only touch
+			// the expression token(s), not the item/index binding names.
+			const loop = parseForAttribute(value);
+			if (loop && !target.isLoop) {
+				const exprStartInValue = value.lastIndexOf(loop.expression);
+				if (exprStartInValue >= 0) {
+					searchValue = loop.expression;
+					searchOffset = valueOffset + exprStartInValue;
+				}
+			}
+		}
+
+		for (const match of searchValue.matchAll(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/g)) {
+			const segments = match[0].split('.');
+			if (segments[0] !== target.name) continue;
+			const absStart = searchOffset + match.index;
+			add(absStart, absStart + target.name.length);
+		}
+	};
+
+	if (target.isLoop) {
+		// Declaration token(s) + every use inside an active scope that binds this name.
+		for (const template of findTemplates(source)) {
+			if (template.tag !== 'html') continue;
+			const body = source.slice(template.start, template.end);
+			const attributePattern = /(@[\w-]+)\s*=\s*(["'])(.*?)\2/gs;
+
+			for (const attribute of body.matchAll(attributePattern)) {
+				const directive = attribute[1];
+				const value = attribute[3];
+				const valueOffset = template.start + attribute.index + attribute[0].indexOf(value);
+
+				if (directive === '@for') {
+					const declaration = parseForAttribute(value);
+					if (!declaration) continue;
+					const tokens = [...value.matchAll(/\S+/g)];
+					if (target.loopKind === 'item' && tokens[0] && tokens[0][0] === target.name) {
+						add(valueOffset + tokens[0].index, valueOffset + tokens[0].index + target.name.length);
+					}
+					if (target.loopKind === 'index' && declaration.index && tokens[1] && tokens[1][0] === target.name) {
+						add(valueOffset + tokens[1].index, valueOffset + tokens[1].index + target.name.length);
+					}
+				}
+
+				for (const match of value.matchAll(/\b[A-Za-z_$][\w$]*\b/g)) {
+					if (match[0] !== target.name) continue;
+					const absStart = valueOffset + match.index;
+					const scopes = forScopesAt(source, absStart);
+					const inScope = scopes.some(s =>
+						(target.loopKind === 'index' ? s.index === target.name : s.item === target.name)
+					);
+					if (inScope) add(absStart, absStart + target.name.length);
+				}
+			}
+		}
+
+		return ranges;
+	}
+
+	// Component member: declaration site(s) + every matching template root reference.
+	for (const def of componentDefinitions(source)) {
+		if (def.componentStart === target.componentStart && def.path.join('.') === target.path.join('.')) {
+			add(def.start, def.end);
+		}
+	}
+
+	for (const template of findTemplates(source)) {
+		if (template.tag !== 'html') continue;
+		// Template must belong to the same createComponent options object.
+		if (template.start <= target.componentStart || template.start >= target.componentEnd) continue;
+
+		const body = source.slice(template.start, template.end);
+		const attributePattern = /(@[\w-]+)\s*=\s*(["'])(.*?)\2/gs;
+
+		for (const attribute of body.matchAll(attributePattern)) {
+			const directive = attribute[1];
+			const value = attribute[3];
+			const valueOffset = template.start + attribute.index + attribute[0].indexOf(value);
+			collectInValue(directive, value, valueOffset);
+		}
+	}
+
+	return ranges;
+}
+
+/**
+ * Prepares a rename operation by confirming the symbol under the cursor is renamable.
+ *
+ * @param {TextDocument} document Open document.
+ * @param {import('vscode-languageserver/node').Position} position Cursor position.
+ * @returns {import('vscode-languageserver/node').Range | {range: import('vscode-languageserver/node').Range, placeholder: string} | null}
+ */
+function prepareRename(document, position) {
+	const target = renameTarget(document, position);
+	if (!target) return null;
+	return { range: target.range, placeholder: target.name };
+}
+
+/**
+ * Finds all same-file references to the symbol under the cursor (declaration + template uses).
+ *
+ * @param {TextDocument} document Open document.
+ * @param {import('vscode-languageserver/node').Position} position Cursor position.
+ * @returns {import('vscode-languageserver/node').Location[] | null}
+ */
+function references(document, position) {
+	const target = renameTarget(document, position);
+	if (!target) return null;
+
+	const ranges = collectRenameRanges(document, target);
+	if (!ranges.length) return null;
+
+	return ranges.map(({ start, end }) => ({
+		uri: document.uri,
+		range: { start: document.positionAt(start), end: document.positionAt(end) }
+	}));
+}
+
+/**
+ * Performs a same-file rename of a component member or loop variable.
+ *
+ * @param {TextDocument} document Open document.
+ * @param {import('vscode-languageserver/node').Position} position Cursor position.
+ * @param {string} newName Requested new identifier.
+ * @returns {import('vscode-languageserver/node').WorkspaceEdit | null}
+ */
+function rename(document, position, newName) {
+	if (!/^[A-Za-z_$][\w$]*$/.test(newName)) return null;
+
+	const target = renameTarget(document, position);
+	if (!target) return null;
+	if (newName === target.name) return { changes: { [document.uri]: [] } };
+
+	const ranges = collectRenameRanges(document, target);
+	if (!ranges.length) return null;
+
+	// Sort descending so offsets remain valid when applying sequential edits is not an issue
+	// (LSP applies all edits as a set against the original document).
+	ranges.sort((a, b) => b.start - a.start);
+
+	const edits = ranges.map(({ start, end }) => ({
+		range: { start: document.positionAt(start), end: document.positionAt(end) },
+		newText: newName
+	}));
+
+	return { changes: { [document.uri]: edits } };
 }
 
 /**
@@ -902,10 +1316,46 @@ function handleDefinition({ textDocument, position }) {
 	return document ? definition(document, position) : null;
 }
 
+/**
+ * Resolves an LSP prepareRename request.
+ *
+ * @param {{textDocument: {uri: string}, position: import('vscode-languageserver/node').Position}} params Prepare-rename parameters.
+ * @returns {import('vscode-languageserver/node').Range | {range: import('vscode-languageserver/node').Range, placeholder: string} | null}
+ */
+function handlePrepareRename({ textDocument, position }) {
+	const document = documents.get(textDocument.uri);
+	return document ? prepareRename(document, position) : null;
+}
+
+/**
+ * Resolves an LSP rename request.
+ *
+ * @param {{textDocument: {uri: string}, position: import('vscode-languageserver/node').Position, newName: string}} params Rename parameters.
+ * @returns {import('vscode-languageserver/node').WorkspaceEdit | null}
+ */
+function handleRename({ textDocument, position, newName }) {
+	const document = documents.get(textDocument.uri);
+	return document ? rename(document, position, newName) : null;
+}
+
+/**
+ * Resolves an LSP references request.
+ *
+ * @param {{textDocument: {uri: string}, position: import('vscode-languageserver/node').Position}} params References parameters.
+ * @returns {import('vscode-languageserver/node').Location[] | null}
+ */
+function handleReferences({ textDocument, position }) {
+	const document = documents.get(textDocument.uri);
+	return document ? references(document, position) : null;
+}
+
 documents.onDidChangeContent(validateChangedDocument);
 documents.onDidOpen(validateOpenedDocument);
 connection.onCompletion(handleCompletion);
 connection.onHover(handleHover);
 connection.onDefinition(handleDefinition);
+connection.onPrepareRename(handlePrepareRename);
+connection.onRenameRequest(handleRename);
+connection.onReferences(handleReferences);
 documents.listen(connection);
 connection.listen();
