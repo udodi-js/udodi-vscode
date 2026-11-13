@@ -7,8 +7,8 @@ export const ScopeInspection = createComponent({
 	name: 'ScopeInspection',
 	state: {
 		user: {
-			name: 'john doe',
-			lastName: 'doe'
+			name: 'celestine attamah',
+			lastName: 'attamah'
 		},
 		items: [
 			{ label: 'Item 1' },
@@ -24,13 +24,6 @@ export const ScopeInspection = createComponent({
 		 */
 		save(event, message) {
 			console.log('Save button clicked:', event, message);
-		},
-		list(range = 0) {
-			return [
-				{ id: 1, label: 'Item 1' },
-				{ id: 2, label: 'Item 2' },
-				{ id: 3, label: 'Item 3' }
-			]
 		},
 	},
 	template: html`
